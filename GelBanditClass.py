@@ -3,7 +3,6 @@ import subprocess
 import pandas as pd
 import papermill as pm
 from glob import glob
-import plotly.express as px
 from lxml import etree
 from pathlib import Path
 from openpyxl import Workbook
@@ -74,12 +73,13 @@ class GelBandit:
         # '#FC0080', '#B2828D', '#6C7C32', '#778AAE', '#862A16', '#A777F1',
         # '#620042', '#1616A7', '#DA60CA', '#6C4516', '#0D2A63', '#AF0038']
 
+        # Orange-reds to start
         self.colours=['#FF5900', '#FFBA08', '#F48C06', '#9D0208', '#E15F99', '#25B0B0',
          '#B68100', '#750D86', '#EB663B', '#511CFB', '#00A08B', '#FB00D1',
          '#FC0080', '#B2828D', '#6C7C32', '#778AAE', '#862A16', '#A777F1',
          '#620042', '#1616A7', '#DA60CA', '#6C4516', '#0D2A63', '#AF0038']
 
-        # Define file extensions
+        # Define fasta file extensions
         self.fasta_extensions = ['.fa', '.FA', '.fasta', '.FASTA', '.faa', '.FAA']
         
         self.results_op = self.make_results_folder()
@@ -122,29 +122,28 @@ class GelBandit:
             print(f"Error: {e}. Please use a file in excel or tab-delimited format.")
             return None
         
-        # Add a 'Basename' column to the dataframe
+        # Add basename col to the dataframe
         print(conditions_df)
         conditions_df['Basename'] = conditions_df['Raw file path'].apply(lambda x: os.path.basename(str(Path(x))))
         
-        # Convert the dataframe to a dictionary with 'raw_file' as keys
+        # Convert df to dict
         conditions_dict = {}
         for _, row in conditions_df.iterrows():
             raw_file = row['Basename']
             conditions_dict[raw_file] = row.drop('Basename').to_dict()
         return conditions_dict
 
-    # Define function to map species to file location
+    # Map species to file location
+    # This is a bit redudanct if using the GUI but good for cmdline
     def load_species_dict(self):
-        # Load the file into a dataframe
         df = pd.read_excel(self.database_path, sheet_name="Sheet1")
-    
-        # Convert species names to lowercase and create dictionary
         species_dict = {row['Species'].upper(): row['Local path'] for _, row in df.iterrows()}
     
         return species_dict
 
     def get_species_filepath(self):
-        # Convert input to uppercase and fetch the filepath
+        # Convert input to uppercase and fetch filepath
+        # The uppercase thing makes less sense now, may change
         species = self.db.upper()
         return Path(self.species_dict.get(species, None))
 
@@ -172,7 +171,10 @@ class GelBandit:
         return files
 
     def get_POIs(self):
-        # Initialize all_POIs with any provided extra POIs or an empty list
+        # Start with extra POIs if they exist
+        # Then get POIs from the fasta files
+        # Note--this demands that users only use POIs in extra fasta files
+        # Search databases must be one file (use cat)
         all_POIs = self.extra_POIs if self.extra_POIs else []
         
         for fasta_file in self.fasta_files:
@@ -182,24 +184,31 @@ class GelBandit:
                         POI = record.id.split('|')[1]
                         all_POIs.append(POI)
                     except IndexError as e:
-                        print("Look like one of your custom fasta files isn't Uniprot-formatted.")
+                        print("Looks like one of your custom fasta files isn't Uniprot-formatted.")
                         print(f"{e}")
         
         return all_POIs
 
     def get_msconvert_path(self):
         msconvert_path = None
+        # Slow--push this to the GUI at some point and collect default in config
+        # Thereafter, get user to refresh if they move it, have a new version, etc.
+        # Can still run most of GelBandit, just prevents base peak plotting
         for root_folder in ['C:\\Users','C:\\Program Files', 'C:\\Program Files (x86)']:
             for root, dirs, files in os.walk(root_folder):
                 if 'msconvert.exe' in files:
                     msconvert_path = os.path.join(root, 'msconvert.exe')
-                    break  # Stop the inner loop if we find msconvert.exe
-            if msconvert_path:  # Stop the outer loop if we find msconvert.exe
+                    break 
+            if msconvert_path:
                 break
         print(msconvert_path)
         return msconvert_path
 
     # Non-init methods
+    # Really, I have too many non-init methods..
+
+    # Check for a sentinel file produced by the GUI
+    # Need to improve: end any proceeding subprocess before cleaning
     def check_and_terminate_if_sentinel_exists(self):
         if self.sentinel_file_exists():
             try:
@@ -238,6 +247,7 @@ class GelBandit:
                     if Path(self.paramterized_nb.replace('.ipynb','.html')).exists():
                         Path(self.paramterized_nb.replace('.ipynb','.html')).unlink()
                 # Removing ALL completed file converts for now if this point of the program was reached
+                # This isn't great, need to smooth out
                 if hasattr(self, 'converted_op'):
                     if Path(self.converted_op).exists():
                         shutil.rmtree(Path(self.converted_op))
@@ -246,16 +256,13 @@ class GelBandit:
                         Path(self.paramterized_chromo_nb).unlink()
                     if Path(self.paramterized_chromo_nb.replace('.ipynb','.html')).exists():
                         Path(self.paramterized_chromo_nb.replace('.ipynb','.html')).unlink()
-                # Clean up any resources if necessary
-                # e.g. close open files, terminate child processes, etc.
-                # Checking all files produced in script
                 print("Sentinel file detected. Terminating script.")
-                exit()  # This will terminate the current script
+                exit() 
             except Exception as e:
                 print(f"An error occurred during cleanup: {e}")
             finally:
                 print("Sentinel file detected. Terminating script.")
-                exit()  # This will terminate the current script
+                exit()
     
     def concatenate_fasta_files(self):
         def append_file(inp_file, output_file):
@@ -265,6 +272,9 @@ class GelBandit:
             with open(copied_file, "a") as file:
                 file.write('\n')
                 file.close()
+            # writing every line seemed to take ages before, but writing to remove whitespace
+            # doesn't seem that bad, so probably should perform concat in Python base
+            # Also, this is really non-portabel...
             subprocess.run([r'C:\Users\lwoods\AppData\Local\mambaforge\envs\prot_plots_env\Library\usr\bin\cat.exe',str(copied_file),'>>',str(output_file)],shell=True)
             os.remove(copied_file)   
         Path(self.master_fasta).parent.mkdir(parents=True, exist_ok=True)
@@ -280,9 +290,10 @@ class GelBandit:
             shutil.move(Path(str(self.master_fasta).replace('.fasta','_no_empty_lines.fasta')), Path(self.master_fasta))   
         else:
             print("Merged fasta already exists--skipping\n")
-
+            
+    # Creating a new MW par file means I don't need to link templates
+    # And new versions should work automatically
     def create_MaxQuant_par(self):
-        # Create an empty params file for editing if one isn't provided
         if self.MQ_params:
             pass
         else:
@@ -313,6 +324,10 @@ class GelBandit:
             print("Standard Output:")
             print(result_stdout)
 
+    # Edit with user params
+    # Only editing fasta and raw files if using uploaded params
+    # Later, could offer ability to run old params
+    # with new MQ version
     def edit_MQ_par(self):
         print(Path(self.MQ_params))
         tree = etree.parse(Path(self.MQ_params))
@@ -459,6 +474,7 @@ class GelBandit:
         self.temp_MQ_params = Path(self.output_folder, os.path.basename(str(Path(self.MQ_params))).split('.xml')[0] + '_temp.xml')
         et.write(self.temp_MQ_params, pretty_print=True)
 
+    # Should really remove the temp and created (if no self.user_input_params) here--but keep updated
     def run_MaxQuant(self):
         win_MQ_params_updated = Path(str(self.temp_MQ_params).split('_temp.xml')[0] + '_updated.xml')
         print(win_MQ_params_updated)
@@ -474,16 +490,16 @@ class GelBandit:
                 win_MQ_params_updated.unlink()
 
             # Start changeFolder subprocess
+            # MaxQuant fixes the gt issue in html :)
             process_1 = subprocess.Popen(
                 [self.MQ_path, str(self.temp_MQ_params), '--changeFolder', str(win_MQ_params_updated), str(master_folder), str(self.raw_folder)],
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
-            # Periodically check if the sentinel file exists while the subprocess is running
+            # check if the sentinel file exists while the subprocess is running
             while process_1.poll() is None:
                 self.check_and_terminate_if_sentinel_exists()
-                time.sleep(2)  # You can adjust this sleep duration
-
-            # Fetch the results after the process ends
+                time.sleep(2)  
+                
             result_stdout, result_stderr = process_1.communicate()
 
             if process_1.returncode == 0:
@@ -496,16 +512,15 @@ class GelBandit:
                 print(result_stderr)
             
             # Start search subprocess
+            # Ideally, could have some kind of progress report for the GUI to post
+            # as a progress bar
             process_2 = subprocess.Popen(
                 [self.MQ_path, str(win_MQ_params_updated)],
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
-            # Again, periodically check if the sentinel file exists while the subprocess is running
             while process_2.poll() is None:
                 self.check_and_terminate_if_sentinel_exists()
                 time.sleep(2)
-
-            # Fetch the results after the process ends
             MQ_result_stdout, MQ_result_stderr = process_2.communicate()
 
             if process_2.returncode == 0:
@@ -517,9 +532,12 @@ class GelBandit:
                 print("Error Output:")
                 print(MQ_result_stderr)
         else:
+            # Don't run if results exist
             print("MaxQuant output folder already available.")
 
     def get_poi_colour_map(self):
+        # Need to rewrite ipynbs to take colour map (maybe?)
+        # Generate POI:colour map for Excel highlights
         colours_in_use = self.colours[0:len(self.POIs)]
         poi_colours_map = dict(zip(sorted(self.POIs), colours_in_use))
         return poi_colours_map
@@ -542,6 +560,7 @@ class GelBandit:
         summary_prot_group_cols = base_cols + experiment_cols + ['Potential contaminant', 'Score']
 
         def extract_gene_names(header):
+            # Watch shared proteins
             if ";" in str(header):
                 headers = str(header).split(";")
             else:
@@ -550,6 +569,7 @@ class GelBandit:
             return ";".join(gene_names)
 
         def extract_protein_names(header):
+            # Watch shared proteins
             if ";" in str(header):
                 headers = str(header).split(";")
             else:
@@ -558,6 +578,7 @@ class GelBandit:
             return ";".join(protein_names)
         
         if 'Gene names' not in prot_groups_df.columns:
+            # Some version of MaxQuant don't give 'Gene names' column
             prot_groups_df['Gene names'] = prot_groups_df['Fasta headers'].apply(extract_gene_names)
 
         if 'Protein names' not in prot_groups_df.columns:
@@ -606,6 +627,8 @@ class GelBandit:
         if self.reattribute==True:
             prot_groups_df=reattribute_proteingroups(prot_groups_df, self.POIs)
             peptides_df=reattribute_peptides(peptides_df, self.POIs)
+            # Add a new column, rather than replcaing an existing one
+            # Currently, just stuck on the end, but should insert
             base_cols.append('Reattributed Protein')
             prot_cols_list=['Reattributed Protein']
             pept_cols_list=['Reattributed Protein']
@@ -614,7 +637,6 @@ class GelBandit:
             prot_cols_list=['Majority protein IDs','Proteins IDs']
             pept_cols_list=['Leading razor protein','Proteins']
             
-        # Sort the DataFrames
         prot_groups_df = prot_groups_df.sort_values(by='Intensity', ascending=False)
         summary_prot_df= prot_groups_df[summary_prot_group_cols]
 
@@ -623,26 +645,26 @@ class GelBandit:
             for col_name in cols_list:
                 try:
                     if pd.notna(row[col_name]):
+                        # Compensating for protein groups--colour with POI anyway
                         proteins.update(row[col_name].split(';'))
                 except KeyError:
-                    continue  # Ignore columns that don't exist in the row
+                    continue 
 
-            # Priority-based coloring
             for poi, colour in poi_colours_map.items():
                 if poi in proteins:
                     return colour
 
-            return None  # Default no-color
+            return None
         
         # Define row highlight function
         def calculate_brightness(hex_color):
-            # Calculate brightness based on RGB values
+            # Calculate brightness based on RGB 
             r, g, b = int(hex_color[1:3], 16), int(hex_color[3:5], 16), int(hex_color[5:7], 16)
             brightness = (r * 299 + g * 587 + b * 114) / 1000
             return brightness
 
         def get_text_color(hex_color):
-            # Determine whether to use white or black text based on brightness
+            # White or black text based on brightness
             brightness = calculate_brightness(hex_color)
             return "#000000" if brightness > 128 else "#FFFFFF"
         
@@ -662,18 +684,26 @@ class GelBandit:
             prot_groups_df.style.apply(highlight_rows, args=(prot_cols_list, self.poi_colours_map), axis=1).to_excel(writer, sheet_name='Full_proteinGroups', index=False)
             summary_prot_df.style.apply(highlight_rows, args=(prot_cols_list, self.poi_colours_map), axis=1).to_excel(writer, sheet_name='Summary_proteinGroups', index=False)
             peptides_df.style.apply(highlight_rows, args=(pept_cols_list, self.poi_colours_map), axis=1).to_excel(writer, sheet_name='Peptides', index=False)
+            # msms is quite big, so may disengage this line at some point if users don't find it useful
+            # or, could make it a GUI option (included msms sheet = True/False)
             msms_df.style.apply(highlight_rows, args=(['Proteins'], self.poi_colours_map), axis=1).to_excel(writer, sheet_name='msms', index=False)
 
     def jupyter_conversion(self, parameterized_nb):
         # Must be in the right environment!
+        # TO DO! Replace ipynb system with creation of htmls in Python
+        # Might still want to use a subprocess for neatness though
         output_html = Path(str(parameterized_nb).replace('ipynb', 'html'))
         print(output_html)
+        # Must trust
         subprocess.run(["jupyter", "trust", str(parameterized_nb)], capture_output=True, text=True)
+        # Convert ipynb to html
         subprocess.run(["jupyter", "nbconvert", "--no-input", "--to", "html", str(parameterized_nb), str(output_html)], capture_output=True, text=True)
 
     def run_parameterized_nb(self):
         self.check_and_terminate_if_sentinel_exists()
         self.op_notebook = Path(self.output_folder) / "Gel_bandit_plotter.ipynb"
+        #TO DO! Log! Don't print. 
+        # Injecting parameters
         print(self.gel_notebook_template)
         print(self.op_notebook)
         print("Arguments:")
@@ -725,7 +755,9 @@ class GelBandit:
 
             else:
 
-                # If they don't all exist, proceed with the conversion
+                # If they don't all exist, convert
+                # I should change this to convert only when necessary
+                # BUT I don't have a good way of knowing which are the half-completed files..
                 BASE_COMMAND = [
                     "--zlib",
                     "--outdir", f'{str(self.converted_op)}',
@@ -741,12 +773,10 @@ class GelBandit:
                     command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
                     )
 
-                # Again, periodically check if the sentinel file exists while the subprocess is running
                 while process_3.poll() is None:
                     self.check_and_terminate_if_sentinel_exists()
                     time.sleep(2)
 
-                # Fetch the results after the process ends
                 MSConvert_result_stdout, MSConvert_result_stderr = process_3.communicate()
 
                 if process_3.returncode == 0:
@@ -759,6 +789,7 @@ class GelBandit:
                     print(MSConvert_result_stderr)        
 
     def run_parameterized_chromo_nb(self):
+        # Same as above, different notebook
         self.check_and_terminate_if_sentinel_exists()
         self.op_chromo_notebook = Path(self.output_folder) / f"Chromato_plotter_parameterized.ipynb"
         print(self.chromo_notebook_template)
@@ -778,7 +809,7 @@ class GelBandit:
         )
         self.jupyter_conversion(self.op_chromo_notebook)
 
-
+# Methods for dealing with non-string args
 def comma_separated_string_to_list(comma_separated_string):
     return comma_separated_string.split(',')
 
@@ -792,21 +823,32 @@ def str_to_bool(v):
     else:
         raise argparse.ArgumentTypeError('Boolean value expected.')
 
+def str_to_int(v):
+    if isinstance(v, int):
+       return v
+    else:
+        return int(v)
+
+def str_to_float(v):
+    if ininstance(v, float):
+        return v
+    else:
+        return float(v)
 
 if __name__ == "__main__":
 
 # FOR TESTING! ###
     sys.argv = [
-        "GelBanditClass",  # normally this is the script name, it's not important here
+        "GelBanditClass",
         "--MQ_version", "2.1.4.0",
-        "--MQ_path", r"C:\Users\lwoods\Desktop\MaxQuant_v2.1.4.0 (1)\MaxQuant v2.1.4.0\bin\MaxQuantCmd.exe",
-        "--db_path", r"C:\Users\lwoods\Documents\LW_Projects_folder\general\database_map.xlsx",
-        "--gel_bandit_plotter", r"C:\Users\lwoods\Documents\Python Scripts\gel_bandit_plotter.ipynb",
-        "--chromo_plotter", r"C:\Users\lwoods\Documents\Python Scripts\Chromato-plotter_v4.ipynb",
-        "--fasta_folder", r"C:\Users\lwoods\Documents\LW_Projects_folder\Poster_data\GelBandit\fasta_folder",
-        "--output_folder", r"C:\Users\lwoods\Documents\LW_Projects_folder\Poster_data\GelBandit",
-        "--conditions", r"C:\Users\lwoods\Documents\LW_Projects_folder\Poster_data\GelBandit\conditions.xlsx",
-        "--db", "Insect (SF9)",
+        "--MQ_path", "/path/to/MaxQuantCmd.exe",
+        "--db_path", "/path/to/database_map.xlsx",
+        "--gel_bandit_plotter", "/path/to/gel_bandit_plotter.ipynb",
+        "--chromo_plotter", "/path/to/Chromato-plotter_v4.ipynb",
+        "--fasta_folder", "/path/to/fasta_folder",
+        "--output_folder", "/path/to/output_folder",
+        "--conditions", "/path/to/output_folder/conditions.xlsx",
+        "--db", "Insect (SF9)", # Must be on database map with path
         "--reattribute", "no",
         "--user_input_params", "False",
         #"--prot_quantification", "Razor + Unique",
@@ -831,25 +873,25 @@ if __name__ == "__main__":
 
     # Optional arguments
     parser.add_argument('--prot_quantification', required=False, type=str, default="Razor + Unique", help='Protein quantification method (Default: Razor + Unique).')
-    parser.add_argument('--num_missed_cleavages', required=False, type=int, default=2, help='Number of missed cleavages permitted (Default: 2).')
+    parser.add_argument('--num_missed_cleavages', required=False, type=str_to_int, default=2, help='Number of missed cleavages permitted (Default: 2).')
 
-    parser.add_argument('--fixed_mods', required=False, type=list, default=["Carbamidomethyl (C)"], help='default=["Carbamidomethyl (C)"]')
-    parser.add_argument('--enzymes', required=False, type=list, default=["Trypsin/P"], help='default=["Trypsin/P"]')
+    parser.add_argument('--fixed_mods', required=False, type=comma_separated_string_to_list, default=["Carbamidomethyl (C)"], help='default=["Carbamidomethyl (C)"]')
+    parser.add_argument('--enzymes', required=False, type=comma_separated_string_to_list, default=["Trypsin/P"], help='default=["Trypsin/P"]')
     parser.add_argument('--use_enzyme_first_search_str', required=False, type=str, default="True", help='default=True')
-    parser.add_argument('--fs_enzymes', required=False, type=list, default=["Trypsin/P"], help='default=["Trypsin/P"]')
-    parser.add_argument('--var_mods', required=False, type=list, default=["Oxidation (M)", "Acetyl (Protein N-term)"], help='default=["Oxidation (M)", "Acetyl (Protein N-term)"]')
+    parser.add_argument('--fs_enzymes', required=False, type=comma_separated_string_to_list, default=["Trypsin/P"], help='default=["Trypsin/P"]')
+    parser.add_argument('--var_mods', required=False, type=comma_separated_string_to_list, default=["Oxidation (M)", "Acetyl (Protein N-term)"], help='default=["Oxidation (M)", "Acetyl (Protein N-term)"]')
     parser.add_argument('--second_peptide_str', required=False, type=str, default="False", help='default=False')
     parser.add_argument('--match_between_runs', required=False, type=str, default="False", help='default=False')
-    parser.add_argument('--num_threads', required=False, type=int, default=16, help='Number of threads to use (Default: 16).')
+    parser.add_argument('--num_threads', required=False, type=str_to_int, default=16, help='Number of threads to use (Default: 16).')
     
     parser.add_argument('--id_parse_rule', required=False, type=str, default=">.*\|(.*)\|", help='Parsing rules for fasta IDs. Changing not recommended! (Default: >.*\|(.*)\| (Uniprot)).')
     parser.add_argument('--desc_parse_rule', required=False, type=str, default=">(.*)", help='Parsing rules for fasta descriptions. Changing not recommended! (Default: >(.*) (Uniprot)).')
     parser.add_argument('--andromeda_path', required=False, type=str, default="C:\Temp\Andromeda", help='Location for storing Andromeda fixed search folder (Default: C:\Temp\Andromeda).')
     parser.add_argument('--MQ_params', required=False, type=str, default=None, help='Path to the MQ params file (Default: None.')
     parser.add_argument('--extra_POIs', required=False, type=comma_separated_string_to_list, default=None, help='Comma-separated extra proteins of interest.')
-    parser.add_argument('--intensity_threshold', required=False, type=float, default=40, help='Threshold (%) to display base peak labels (Default: 40).')
-    parser.add_argument('--ppm_tolerance', required=False, type=float, default=500, help='Match tolerance for matching base peak m/z values to MaxQuant (Default: 500).')
-    parser.add_argument('--rt_match_window', required=False, type=float, default=5, help='Match window (minutes) for matching base peaks to MaxQuant (Default: 5).')
+    parser.add_argument('--intensity_threshold', required=False, type=str_to_float, default=40, help='Threshold (%) to display base peak labels (Default: 40).')
+    parser.add_argument('--ppm_tolerance', required=False, type=str_to_float, default=500, help='Match tolerance for matching base peak m/z values to MaxQuant (Default: 500).')
+    parser.add_argument('--rt_match_window', required=False, type=str_to_float, default=5, help='Match window (minutes) for matching base peaks to MaxQuant (Default: 5).')
     
     args = parser.parse_args()
     print(args)
